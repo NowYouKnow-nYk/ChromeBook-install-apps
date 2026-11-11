@@ -16,6 +16,17 @@
 # Cache : /tmp/install-apps-cache ; s'il n'y a pas assez de place (estimée avant le téléchargement),
 #         dossier install-apps-cache à côté du script, supprimé après l'installation.
 # Journal : écrit dans /tmp ; en cas d'erreur, déplacé à côté du script (install-apps-DATE.log).
+
+# Lancé par « curl ... | bash » : stdin est le script, donc impossible de lire le clavier.
+# On range le script dans un fichier temporaire et on le relance avec le terminal (/dev/tty) en entrée.
+if [ -z "${BASH_VERSION:-}" ]; then echo "Ce script nécessite bash (et non sh) : ... | bash" >&2; exit 1; fi
+if [ -z "${BASH_SOURCE[0]:-}" ] && [ -z "${INSTALL_APPS_TMP:-}" ]; then
+  _t="$(mktemp /tmp/install-apps.XXXXXX)"; cat > "$_t"
+  export INSTALL_APPS_TMP="$_t" INSTALL_APPS_DIR="$PWD"
+  if { : </dev/tty; } 2>/dev/null; then exec bash "$_t" "$@" </dev/tty; else exec bash "$_t" "$@" </dev/null; fi
+fi
+# le fichier temporaire reste lisible par bash tant qu'il est ouvert : on peut le supprimer tout de suite
+if [ -n "${INSTALL_APPS_TMP:-}" ]; then rm -f "$INSTALL_APPS_TMP"; fi
 set -euo pipefail
 
 # ====== CONFIG ================================================================
@@ -108,7 +119,11 @@ for _e in "${CATALOG[@]}"; do
 done
 N=${#IDS[@]}
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${INSTALL_APPS_DIR:-}"   # « à côté du script » = dossier courant si lancé via curl | bash
+if [ -z "$SCRIPT_DIR" ]; then
+  if [ -f "${BASH_SOURCE[0]:-}" ]; then SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; else SCRIPT_DIR="$PWD"; fi
+fi
+if [ -n "${INSTALL_APPS_TMP:-}" ]; then SELF="curl -fsSL cbook.doume.be/.sh | bash -s --"; else SELF="bash $0"; fi
 # Journal : écrit dans /tmp ; en cas d'erreur il est déplacé à côté du script (FINAL_LOG)
 LOG_FILE="/tmp/install-apps-$(id -un).log"
 if [ -w "$SCRIPT_DIR" ]; then FINAL_LOG="$SCRIPT_DIR/install-apps-$(date +%Y%m%d-%H%M%S).log"; else FINAL_LOG="$LOG_FILE"; fi
@@ -125,7 +140,7 @@ REPO_FILES=(
 # --- Arguments ----------------------------------------------------------------
 MODE="install"; UNINSTALL_PICKED=0; ASSUME_YES=0; SEL_ALL=0; SEL_MIN=0; ARGS_APPS=()
 DL_ONLY=0; LOCAL_ONLY=0; KEEP_CACHE=0
-usage() { sed -n '2,/^set -/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^$/p' "${BASH_SOURCE[0]:-$0}" | sed '$d' | sed 's/^# \{0,1\}//'; }
 for a in "$@"; do
   case "$a" in
     --debug) DEBUG=1 ;;
@@ -683,7 +698,7 @@ if [ "$LOCAL_ONLY" = 1 ] && [ ! -s "$CACHE/ready.txt" ]; then
   done
 fi
 if [ "$LOCAL_ONLY" = 1 ] && [ ${#ARGS_APPS[@]} -eq 0 ] && [ "$SEL_ALL" = 0 ] && [ "$SEL_MIN" = 0 ]; then
-  [ -s "$CACHE/ready.txt" ] || { EXIT_MSG="Aucun téléchargement trouvé dans $CACHE : lancez d'abord « bash $0 --download »."; exit 1; }
+  [ -s "$CACHE/ready.txt" ] || { EXIT_MSG="Aucun téléchargement trouvé dans $CACHE : lancez d'abord « $SELF --download »."; exit 1; }
   mapfile -t APPS < "$CACHE/ready.txt"
 elif [ "$SEL_ALL" = 1 ]; then
   APPS=("${IDS[@]}")
@@ -707,7 +722,7 @@ do_install
 
 echo
 if [ ${#FAILED[@]} -eq 0 ] && [ "$DL_ONLY" = 1 ]; then
-  echo "Téléchargement terminé. Installez ensuite, sans réseau : bash $0 --install-only"
+  echo "Téléchargement terminé. Installez ensuite, sans réseau : $SELF --install-only"
 elif [ ${#FAILED[@]} -eq 0 ]; then
   echo "Terminé sans erreur. Les apps apparaissent dans le lanceur ChromeOS (dossier « Apps Linux »)."
 else
